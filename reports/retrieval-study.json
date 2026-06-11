@@ -1,0 +1,64 @@
+{
+  "timestamp": "2026-06-11T03:30:36.461Z",
+  "cells": [
+    {
+      "kind": "dense",
+      "chunk_size": 512,
+      "questions": 50,
+      "hit_at": {
+        "5": 1,
+        "8": 1,
+        "12": 1
+      },
+      "mrr_at_12": 0.926,
+      "avg_top1_score_in_corpus": 0.763,
+      "avg_top1_score_out_of_corpus": 0.73,
+      "search_p50_ms": 17,
+      "search_p95_ms": 26
+    },
+    {
+      "kind": "dense",
+      "chunk_size": 800,
+      "questions": 50,
+      "hit_at": {
+        "5": 1,
+        "8": 1,
+        "12": 1
+      },
+      "mrr_at_12": 0.965,
+      "avg_top1_score_in_corpus": 0.749,
+      "avg_top1_score_out_of_corpus": 0.706,
+      "search_p50_ms": 15,
+      "search_p95_ms": 18
+    },
+    {
+      "kind": "dense",
+      "chunk_size": 1200,
+      "questions": 50,
+      "hit_at": {
+        "5": 1,
+        "8": 1,
+        "12": 1
+      },
+      "mrr_at_12": 0.963,
+      "avg_top1_score_in_corpus": 0.745,
+      "avg_top1_score_out_of_corpus": 0.695,
+      "search_p50_ms": 14,
+      "search_p95_ms": 19
+    },
+    {
+      "kind": "rerank",
+      "chunk_size": 800,
+      "pool": 16,
+      "top_k": 8,
+      "questions": 40,
+      "dense_hit_at_8": 1,
+      "rerank_hit_at_8": 1,
+      "dense_mrr": 0.965,
+      "rerank_mrr": 0.954,
+      "rerank_p50_ms": 1781,
+      "rerank_p95_ms": 2964,
+      "avg_rank_improvement": -0.07
+    }
+  ]
+}
