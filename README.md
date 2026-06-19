@@ -1,13 +1,13 @@
 # Guardrailed RAG over SCOTUS Opinions
 
-A production-ready RAG (Retrieval-Augmented Generation) system over ~500 US Supreme Court opinions, demonstrating input guardrails, grounded citations, observability-by-design, and cost/latency discipline.
+A production-ready RAG (Retrieval-Augmented Generation) system over ~500 US Supreme Court opinions, demonstrating input guardrails, grounded citations, observability-by-design, and latency discipline.
 
 ## Overview
 
 This project builds a complete RAG pipeline with:
 - **495 SCOTUS opinion chunks** indexed in Qdrant vector database
 - **Langfuse observability** for tracing every step (retrieve → generate → validate)
-- **Groq LLM** for fast, cost-effective generation
+- **Groq LLM** for fast generation
 - **FastAPI REST server** for production-ready deployment
 - **CLI interface** for testing and debugging
 
@@ -223,7 +223,7 @@ Open http://localhost:13000 (credentials: demo@langfuse.com / demo)
 
 View traces for each request:
 - **Retrieval span** — Embedding + Qdrant search (timing, vector dims)
-- **Generation span** — LLM call (tokens, cost, latency)
+- **Generation span** — LLM call (tokens, latency)
 - **Validation span** — Citation coverage + grounding checks
 
 ### Qdrant Collection Info
@@ -293,7 +293,7 @@ a chat model for the provider selected by `LLM_PROVIDER`:
   requests/tokens per minute and per day against the free-tier limits, so
   long eval runs pace themselves instead of hitting 429s.
 - **gemini** — native schema-constrained structured output.
-- **litellm** — any OpenAI-compatible proxy; structured output via
+- **openai** — any OpenAI-compatible proxy; structured output via
   json-schema / tool calling.
 
 Provider quirks are handled once in the factory: the temperature policy
@@ -327,7 +327,7 @@ Two gates run after generation (`src/validator/`):
 
 1. **Citation coverage (deterministic, fast)** — every span must cite at
    least one chunk, and every cited chunk must actually have been retrieved.
-   Catches structural failures before spending money on the judge.
+   Catches structural failures before invoking the judge.
 2. **Grounding judge (LLM, semantic)** — for each span, an LLM judges whether
    the cited chunk entails the claim. Catches the model citing the right
    chunk but misrepresenting what it says.
@@ -343,7 +343,7 @@ is a feature: out-of-corpus questions are expected to end here.
 |-------|-----------|-----|
 | **Embeddings** | Xenova/bge-small | Local CPU, no API keys, 384-dim vectors |
 | **Vector DB** | Qdrant v1.12.4 | Great TS SDK, hybrid search support |
-| **LLM** | Groq (free tier) / Gemini / any OpenAI-compatible proxy | One model factory, swappable via env |
+| **LLM** | Groq / Gemini / any OpenAI-compatible proxy | One model factory, swappable via env |
 | **Observability** | Langfuse v3 | Industry-standard, self-hosted option |
 | **Framework** | Fastify | Lightweight, structured, production-style |
 | **Language** | TypeScript + Node | Production-grade typing and tooling |
@@ -414,7 +414,7 @@ npm run smoke:guardrails
 npm run smoke:pipeline
 ```
 
-All accept `--provider groq|gemini|litellm` and `--model <name>` overrides.
+All accept `--provider groq|gemini|openai` and `--model <name>` overrides.
 
 ### Manual Checks
 
@@ -442,8 +442,8 @@ After completing this project:
 
 ✅ **Input Guardrails** — PII detection, prompt injection defense, policy enforcement  
 ✅ **Grounded Citations** — Schema validation, LLM-as-judge, bounded-retry regeneration  
-✅ **Observability** — Traces wired in from day one, visible cost/latency per component  
-✅ **Cost Discipline** — Before/after metrics, measurable optimizations
+✅ **Observability** — Traces wired in from day one, visible latency per component  
+✅ **Performance Discipline** — Before/after metrics, measurable optimizations
 
 ## Retrieval Configuration Study (Findings)
 
@@ -461,7 +461,7 @@ A configuration sweep across chunk size, ranking strategy, and prompt structure,
 2. **Cross-encoder reranking added no quality here** — with dense retrieval already at ceiling, the reranker could only reshuffle a correct list (MRR 0.965 → 0.954) while adding ~1.8 s/query on an idle CPU. It stays in the codebase behind a runtime flag for corpora where dense retrieval has headroom.
 3. **Benchmark machine state matters** — the reranker initially measured 12–14 s/query because CPU-bound ingest was running concurrently; the clean number is 7× lower. Latency benchmarks now record machine state.
 4. **Similarity scores cannot gate abstention** — top-1 score separation between in-corpus and out-of-corpus questions is only ~0.04 (an out-of-corpus question about a landmark case still scores 0.70+ against a recent opinion that merely cites it). Abstention is handled by the citation/grounding validator layer instead.
-5. **The pipeline cost driver is validation, not retrieval** — retrieval contributes ~15 ms to a ~5 s pipeline; the generation + judge + retry stack accounts for ~4 model calls per question at roughly $0.001–0.0024/question. Cache-friendly prompt ordering (static prefix first, volatile chunks last) is implemented, though provider-side caching never triggered at eval-scale request rates.
+5. **Validation dominates the pipeline, not retrieval** — retrieval contributes ~15 ms to a ~5 s pipeline; the generation + judge + retry stack accounts for ~4 model calls per question. Cache-friendly prompt ordering (static prefix first, volatile chunks last) is implemented, though provider-side caching never triggered at eval-scale request rates.
 
 **Production configuration:** 800-token chunks, top-k = 8, dense-only retrieval, reranker off.
 

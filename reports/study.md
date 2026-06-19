@@ -1,4 +1,4 @@
-# Cost/Latency Study: Retrieval Configuration Sweep
+# Retrieval Configuration Study
 
 **Date:** 2026-06-11
 **Corpus:** 495 US Supreme Court opinions (2023–2025 terms)
@@ -9,19 +9,19 @@
 
 ## Summary
 
-- Swept the retrieval-side dimensions locally at zero LLM cost: chunk size {512, 800, 1200} × dense search, plus a cross-encoder rerank cell (pool 16 → top 8) on the 800-token collection.
+- Swept the retrieval-side dimensions locally with no model calls: chunk size {512, 800, 1200} × dense search, plus a cross-encoder rerank cell (pool 16 → top 8) on the 800-token collection.
 - **Dense retrieval is at ceiling on this corpus**: hit@8 = 100% for every chunk size. The differentiator is ranking quality (MRR) and score separation, not recall.
 - **Reranking adds no quality here and is not free**: MRR went *down* slightly (0.965 → 0.954) and p50 latency rose by ~1.8s/query on an idle CPU (~12–14s/query when the CPU was busy).
 - **Recommended configuration: chunk = 800 tokens, top-k = 8, reranker off, dense-only.**
 
 ## Methodology
 
-### Why a zero-LLM-cost sweep
+### Why a local, no-model-call sweep
 
-A full 36-cell factorial (chunk × top-k × rerank × cache, 50 questions each ≈ 1,800 LLM calls, each with a generation + judge + possible retry ≈ 4 calls/question) was measured on a 3-question smoke sample first: ~24s and ~$0.0024 per question end-to-end. Extrapolated, the full sweep would cost real money and ~12 hours of wall-clock for numbers that the smoke samples already characterize. The retrieval-side dimensions — the ones that actually vary quality on this corpus — are measurable locally for free, so the sweep was split:
+A full 36-cell factorial (chunk × top-k × rerank × cache, 50 questions each ≈ 1,800 model calls, each with a generation + judge + possible retry ≈ 4 calls/question) was measured on a 3-question smoke sample first: ~24s per question end-to-end. Extrapolated, the full sweep would take ~12 hours of wall-clock for numbers the smoke samples already characterize. The retrieval-side dimensions — the ones that actually vary quality on this corpus — are measurable locally without any model calls, so the sweep was split:
 
 - **Retrieval dimensions** (chunk size, ranking, rerank): measured exhaustively and locally via `scripts/run-retrieval-study.ts` against three fully-ingested Qdrant collections (34,343 / 27,374 / 15,382 points for 512/800/1200-token chunks).
-- **LLM dimensions** (generation cost, latency, prompt caching): documented from the smoke samples (`reports/smoke-test.json`) rather than re-measured per cell, since chunk size and top-k shift the prompt length predictably and nothing else.
+- **LLM dimensions** (generation latency, prompt caching): documented from the smoke samples (`reports/smoke-test.json`) rather than re-measured per cell, since chunk size and top-k shift the prompt length predictably and nothing else.
 
 ### Why `platinum.jsonl` and not `golden.jsonl`
 
@@ -66,30 +66,30 @@ Cross-encoder reranker (bge-reranker-base, local CPU), pool = 16 dense candidate
 **Findings:**
 
 1. **No headroom, no benefit.** Dense retrieval already places a relevant chunk at rank ~1; the reranker can only reshuffle a list that is already correct. It occasionally promotes a rhetorically-similar but less-cited passage, which is why MRR ticks *down*.
-2. **The latency cost was initially mis-measured by 7×.** Under CPU contention (three ingest workers running), the reranker measured 12–14 s/query. On an idle CPU it is ~1.8 s p50. Lesson: never benchmark a CPU-bound component while other CPU-bound work is running — and record machine state alongside every benchmark.
+2. **The latency was initially mis-measured by 7×.** Under CPU contention (three ingest workers running), the reranker measured 12–14 s/query. On an idle CPU it is ~1.8 s p50. Lesson: never benchmark a CPU-bound component while other CPU-bound work is running — and record machine state alongside every benchmark.
 3. **Keep the component, ship it off.** The reranker stays in the codebase behind a runtime flag — on a corpus with genuinely ambiguous retrieval (near-duplicate documents, paraphrase-heavy questions) the cross-encoder would earn its latency. On this corpus it cannot.
 
-## LLM-side costs (from smoke samples)
+## LLM-side latency (from smoke samples)
 
-Measured on small samples rather than per-cell (see Methodology). Full pipeline = generation + structured-output validation + grounding judge + up to 1 retry (~4 LLM calls/question).
+Measured on small samples rather than per-cell (see Methodology). Full pipeline = generation + structured-output validation + grounding judge + up to 1 retry (~4 model calls/question).
 
-| Configuration | Latency/question | Tokens/question | Cost/question |
-|---------------|----------------:|----------------:|--------------:|
-| chunk 800, k=8, no rerank, no cache (fast hosted model) | ~5.4 s | ~8K | ~$0.0011 |
-| chunk 800, k=8, rerank + cache-friendly prompts | ~20–24 s* | ~21K | ~$0.0024 |
+| Configuration | Latency/question | Tokens/question |
+|---------------|----------------:|----------------:|
+| chunk 800, k=8, no rerank, no cache (fast hosted model) | ~5.4 s | ~8K |
+| chunk 800, k=8, rerank + cache-friendly prompts | ~20–24 s* | ~21K |
 
 \* includes the contention-inflated rerank latency; on an idle CPU this drops to ~8–10 s.
 
-**Prompt caching:** cache-friendly prompt ordering (static system + few-shot prefix, volatile chunks last) was implemented and enabled, but the provider reported **0 cached input tokens** across all samples — implicit caching never triggered at this request rate. The restructuring is kept (it costs nothing and is correct hygiene for any provider with prefix caching), but no cost/latency benefit could be demonstrated at this scale. Caching pays off on sustained traffic with shared prefixes, not on one-off evals.
+**Prompt caching:** cache-friendly prompt ordering (static system + few-shot prefix, volatile chunks last) was implemented and enabled, but the provider reported **0 cached input tokens** across all samples — implicit caching never triggered at this request rate. The restructuring is kept (it is correct hygiene for any provider with prefix caching), but no latency benefit could be demonstrated at this scale. Caching pays off on sustained traffic with shared prefixes, not on one-off evals.
 
-The cost driver is the validator stack (×4 calls), not retrieval configuration: tokens scale linearly with k × chunk size, but even the heaviest cell is ~$0.0024/question. At this corpus size, **quality engineering is free; the only real spend is the judge.**
+The per-question time is dominated by the validator stack (×4 calls), not retrieval configuration: tokens scale linearly with k × chunk size, but the latency lives in the model calls. At this corpus size, **retrieval-side tuning is effectively negligible; the judge is where the time goes.**
 
 ## Recommendation
 
 **chunk = 800 tokens · top-k = 8 · reranker off · dense-only retrieval**
 
 - Best ranking quality measured (MRR 0.965, hit@8 100%)
-- Retrieval contributes ~15 ms to a ~5 s pipeline — effectively free
+- Retrieval contributes ~15 ms to a ~5 s pipeline — effectively negligible
 - Reranking adds 1.8–14 s (machine-state dependent) for zero measured quality gain on this corpus; keep it available behind its flag for corpora where dense retrieval is not already at ceiling
 - Abstention must stay in the validator layer; similarity scores cannot gate it (0.04 separation)
 

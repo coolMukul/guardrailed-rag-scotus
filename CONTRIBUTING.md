@@ -45,7 +45,7 @@ and compare against the committed baselines in `reports/`:
 
 ```bash
 npm run eval:guardrails   # vs reports/guardrail-evals.json
-npm run study:retrieval   # vs reports/retrieval-study.json (zero LLM cost)
+npm run study:retrieval   # vs reports/retrieval-study.json (no model calls)
 npm run eval -- --limit 10  # spot-check generation + validation metrics
 ```
 
