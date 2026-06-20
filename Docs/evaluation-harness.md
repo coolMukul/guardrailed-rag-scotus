@@ -55,8 +55,7 @@ defined — not for defining it.
 
 A runner streams a dataset, sends each question through the live pipeline, and
 records per-question latency, token counts, and the quality signals below.
-Results are aggregated and written under [`reports/`](../reports/) so a run is a
-durable, diffable artifact rather than console output.
+Results are aggregated and written under [`reports/`](../reports/).
 
 ## The metrics
 
@@ -95,14 +94,6 @@ One number alone cannot make that distinction.
    citations; capture latency and tokens from the trace.
 5. **Store** the per-question result; aggregate across the set (averages,
    percentiles, totals).
-
-## Why a baseline matters
-
-The first full run is the "before" snapshot. Every later change — guardrails,
-validators, a different chunk size, reranking, prompt-cache-friendly ordering —
-is measured against it, so claims are defensible with numbers rather than
-intuition. The snapshot is also a regression guard: if a metric drops
-unexpectedly, the diff against baseline shows where.
 
 ## Gotchas
 

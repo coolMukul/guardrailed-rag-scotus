@@ -436,14 +436,12 @@ npm run cli -- ask "What did the Court hold in Loper Bright?"
 
 The hand-authored evaluation sets (`evals/`) are the test suite. RAG quality depends on retrieval + generation + validation, which unit tests cannot verify. The smoke scripts above guard against regressions in the plumbing; the eval runners (`npm run eval`, `npm run eval:guardrails`, `npm run study:retrieval`) measure the quality metrics that matter.
 
-## Learning Outcomes
-
-After completing this project:
+## Capabilities
 
 ✅ **Input Guardrails** — PII detection, prompt injection defense, policy enforcement  
-✅ **Grounded Citations** — Schema validation, LLM-as-judge, bounded-retry regeneration  
-✅ **Observability** — Traces wired in from day one, visible latency per component  
-✅ **Performance Discipline** — Before/after metrics, measurable optimizations
+✅ **Grounded Citations** — schema validation, LLM-as-judge, bounded-retry regeneration, per-span salvage  
+✅ **Observability** — traces wired through every stage, visible latency per component  
+✅ **Measured retrieval** — configuration study with documented production settings
 
 ## Retrieval Configuration Study (Findings)
 
@@ -459,9 +457,8 @@ A configuration sweep across chunk size, ranking strategy, and prompt structure,
 
 1. **Recall is saturated on this corpus** — court opinions are distinctive documents and factual questions name their case, so hit@8 is 100% at every chunk size. Configurations are differentiated by ranking quality (MRR), where 800-token chunks win: smaller chunks fragment holdings and push the first relevant result lower.
 2. **Cross-encoder reranking added no quality here** — with dense retrieval already at ceiling, the reranker could only reshuffle a correct list (MRR 0.965 → 0.954) while adding ~1.8 s/query on an idle CPU. It stays in the codebase behind a runtime flag for corpora where dense retrieval has headroom.
-3. **Benchmark machine state matters** — the reranker initially measured 12–14 s/query because CPU-bound ingest was running concurrently; the clean number is 7× lower. Latency benchmarks now record machine state.
-4. **Similarity scores cannot gate abstention** — top-1 score separation between in-corpus and out-of-corpus questions is only ~0.04 (an out-of-corpus question about a landmark case still scores 0.70+ against a recent opinion that merely cites it). Abstention is handled by the citation/grounding validator layer instead.
-5. **Validation dominates the pipeline, not retrieval** — retrieval contributes ~15 ms to a ~5 s pipeline; the generation + judge + retry stack accounts for ~4 model calls per question. Cache-friendly prompt ordering (static prefix first, volatile chunks last) is implemented, though provider-side caching never triggered at eval-scale request rates.
+3. **Similarity scores cannot gate abstention** — top-1 score separation between in-corpus and out-of-corpus questions is only ~0.04 (an out-of-corpus question about a landmark case still scores 0.70+ against a recent opinion that merely cites it). Abstention is handled by the citation/grounding validator layer instead.
+4. **Validation dominates the pipeline, not retrieval** — retrieval contributes ~15 ms to a ~5 s pipeline; the generation + judge + retry stack accounts for ~4 model calls per question. Cache-friendly prompt ordering (static prefix first, volatile chunks last) is implemented, though provider-side caching never triggered at eval-scale request rates.
 
 **Production configuration:** 800-token chunks, top-k = 8, dense-only retrieval, reranker off.
 
@@ -475,5 +472,5 @@ A configuration sweep across chunk size, ranking strategy, and prompt structure,
 ---
 
 **Author**: Mukul Varshney  
-**Status**: Retrieval configuration study complete — recommended config documented in `reports/study.md`  
-**Last Updated**: June 11, 2026
+**License**: MIT  
+**Last Updated**: June 20, 2026

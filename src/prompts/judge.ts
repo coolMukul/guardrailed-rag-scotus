@@ -7,8 +7,24 @@
 
 import { Answer } from '../generate/schema.js';
 
+/**
+ * Version of the grounding-judge prompt. Folded into the config fingerprint so
+ * a change to judge wording (which shifts the abstention rate, a scored eval
+ * metric) invalidates cross-run comparisons rather than silently drifting.
+ */
+export const JUDGE_VERSION = 'grounding-judge-v2';
+
+// Calibrated, not maximally strict: an over-strict judge rejected claims the
+// cited chunk genuinely supported (paraphrase or a direct inference), then the
+// single retry couldn't recover and the pipeline abstained on answerable,
+// in-corpus questions. The standard here is "does the chunk support the claim,"
+// allowing faithful paraphrase and direct inference — NOT "does the chunk
+// restate the claim verbatim." Fabrication and contradiction still fail.
 export const JUDGE_SYSTEM =
-  'You are a strict semantic judge. "Entails" means the cited chunk logically supports the claim. ' +
+  'You are a careful, fair grounding judge. A claim "entails" when the cited chunk supports it — ' +
+  'this includes faithful paraphrase and direct inferences a careful reader would draw from the chunk. ' +
+  'Do not require verbatim wording or that the chunk restate the claim. ' +
+  'Mark entails=false only when the chunk does not support the claim or contradicts it. ' +
   'Judge each span independently and report a verdict for every span.';
 
 /**

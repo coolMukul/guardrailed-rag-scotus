@@ -30,14 +30,14 @@ export const CONFIG = {
   },
 
   // LLM generation configuration
-  // Provider-agnostic: single MODEL_NAME used across Groq, Gemini, LiteLLM
+  // Provider-agnostic: single MODEL_NAME used across Groq, Gemini, and OpenAI-compatible endpoints
   generation: {
-    // Which provider to use: 'groq', 'litellm', or 'gemini'
+    // Which provider to use: 'groq', 'openai', or 'gemini'
     // Default: groq (free tier, no billing required to get started)
-    provider: (process.env.LLM_PROVIDER || 'groq') as 'groq' | 'litellm' | 'gemini',
+    provider: (process.env.LLM_PROVIDER || 'groq') as 'groq' | 'openai' | 'gemini',
     // Single model name (each provider interprets it appropriately)
     // To use Gemini: set LLM_PROVIDER=gemini MODEL_NAME=gemini-3.1-flash-lite-preview
-    // To use an OpenAI-compatible proxy: set LLM_PROVIDER=litellm MODEL_NAME=gpt-4o-mini
+    // To use an OpenAI-compatible proxy: set LLM_PROVIDER=openai MODEL_NAME=gpt-4o-mini
     modelName: process.env.MODEL_NAME || 'llama-3.3-70b-versatile',
     // Max tokens to generate per answer (prevents runaway responses)
     // Need enough for JSON structure + answer text + citations
@@ -104,12 +104,12 @@ export const CONFIG = {
     // Free-tier rate limits are enforced client-side; see src/llm/rate-limiter.ts
   },
 
-  // LiteLLM proxy configuration (used when LLM_PROVIDER=litellm)
-  litellm: {
-    // Base URL for LiteLLM proxy
-    baseUrl: process.env.LITELLM_BASE_URL || 'http://localhost:8000',
-    // API key for LiteLLM proxy (if required by proxy)
-    apiKey: process.env.LITELLM_API_KEY,
+  // OpenAI-compatible proxy configuration (used when LLM_PROVIDER=openai)
+  openai: {
+    // Base URL for the OpenAI-compatible proxy
+    baseUrl: process.env.LLM_BASE_URL || 'http://localhost:8000',
+    // API key for the proxy (if required)
+    apiKey: process.env.LLM_API_KEY,
   },
 
   // Google Gemini API configuration (used when LLM_PROVIDER=gemini)
@@ -130,8 +130,8 @@ export const CONFIG = {
 // Environment variables that must be set at startup, per active provider.
 // Only the active provider's credentials are required — running on Gemini
 // must not demand a Groq key, and vice versa.
-export const REQUIRED_ENV_VARS_BY_PROVIDER: Record<'groq' | 'litellm' | 'gemini', string[]> = {
+export const REQUIRED_ENV_VARS_BY_PROVIDER: Record<'groq' | 'openai' | 'gemini', string[]> = {
   groq: ['GROQ_API_KEY'],
   gemini: ['GOOGLE_API_KEY'],
-  litellm: ['LITELLM_BASE_URL'],
+  openai: ['LLM_BASE_URL'],
 };

@@ -19,6 +19,7 @@ import { getRegenerationPrompt, getSystemPrompt } from '../prompts/generation.js
 import { span } from '../obs/langfuse.js';
 import { logger } from '../logger.js';
 import { generateWithStructuredOutputSafe } from '../generate/langchain-generator.js';
+import { RUNTIME } from '../config/runtime.js';
 
 export type ValidationStatus = 'valid' | 'insufficient_evidence';
 
@@ -83,6 +84,23 @@ export async function validateWithRetry(
 
   // Main retry loop
   while (attempt <= maxRetries) {
+    // Gate 0: Explicit abstention. When the generator declines (question not
+    // answerable from the excerpts, or names an out-of-corpus case), it sets
+    // answer.abstained. That is the contract signal — report it as
+    // insufficient_evidence directly. Without this the refusal text would sail
+    // through the citation gates (it cites the most relevant chunk) and be
+    // mislabeled 'valid'. Skipping the grounding judge here also saves an LLM
+    // call on a deliberate non-answer.
+    if (answer.abstained) {
+      logger.info({ action: 'validate_generator_abstained', attempt });
+      return {
+        answer,
+        status: 'insufficient_evidence',
+        coverage_verdict: { passed: false, issues: ['Generator abstained: question not answerable from corpus'] },
+        retry_attempts: attempt,
+      };
+    }
+
     // Gate 1: Coverage check (deterministic, fast)
     const coverage = validateCoverageDeterministic(answer, retrievedChunks);
     coverageVerdictFinal = coverage;
@@ -152,7 +170,32 @@ export async function validateWithRetry(
       answer = regenerated;
       attempt++;
     } else {
-      // Max retries reached; return insufficient_evidence
+      // Max retries reached and grounding still has unsupported spans.
+      // Per-span salvage: rather than throwing away a good answer because one
+      // secondary span failed, keep the spans the judge DID support and drop
+      // only the unsupported ones. Abstain only when no span survives. This is
+      // the fix for over-abstention where retrieval HIT and the core holding is
+      // grounded but a secondary detail (standing, a procedural step) is not.
+      if (RUNTIME.groundingMode === 'per_span') {
+        const salvaged = salvageSupportedSpans(answer, grounding);
+        if (salvaged) {
+          logger.info({
+            action: 'validate_grounding_salvaged',
+            attempt,
+            kept: salvaged.answer_spans.length,
+            dropped: answer.answer_spans.length - salvaged.answer_spans.length,
+          });
+          return {
+            answer: salvaged,
+            status: 'valid',
+            coverage_verdict: coverage,
+            grounding_verdict: grounding,
+            retry_attempts: attempt,
+          };
+        }
+        // salvaged === null: every span was unsupported -> genuine abstention.
+      }
+
       logger.info({
         action: 'validate_max_retries_reached',
         attempt,
@@ -174,6 +217,38 @@ export async function validateWithRetry(
     coverage_verdict: coverageVerdictFinal,
     grounding_verdict: groundingVerdictFinal,
     retry_attempts: attempt,
+  };
+}
+
+/**
+ * Keep only the spans the grounding judge supported, dropping the unsupported
+ * ones, and prune the citations array to chunks the surviving spans still cite.
+ *
+ * Returns null when no span survives (every span was unsupported) — the caller
+ * treats that as a genuine abstention. Returns the original answer unchanged if
+ * nothing would be dropped (defensive; the caller only invokes this when
+ * grounding failed, so at least one span is unsupported).
+ */
+function salvageSupportedSpans(
+  answer: Answer,
+  grounding: { issues: Array<{ spanIndex: number }> },
+): Answer | null {
+  const failed = new Set(grounding.issues.map((iss) => iss.spanIndex));
+  const kept = answer.answer_spans.filter((_, i) => !failed.has(i));
+
+  if (kept.length === 0) return null;
+  if (kept.length === answer.answer_spans.length) return answer;
+
+  const usedIds = new Set<number>();
+  for (const s of kept) {
+    for (const id of s.citation_ids) usedIds.add(id);
+  }
+  const citations = answer.citations.filter((c) => usedIds.has(c.chunk_id));
+
+  return {
+    ...answer,
+    answer_spans: kept as Answer['answer_spans'],
+    citations,
   };
 }
 

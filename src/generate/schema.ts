@@ -36,6 +36,13 @@ export type Citation = z.infer<typeof CitationSchema>;
 
 // Full answer structure: spans + full citation texts
 export const AnswerSchema = z.object({
+  // True when the generator is declining to answer from the provided excerpts
+  // (the question is unanswerable from the corpus, or names a case outside it).
+  // This is the single source of truth for abstention: when set, the pipeline
+  // reports validation_status: 'insufficient_evidence' regardless of how the
+  // refusal text happens to cite a chunk. Not `.optional()` — strict structured
+  // output requires every property in `required`, so the model must always set it.
+  abstained: z.boolean(),
   answer_spans: z.array(AnswerSpanSchema).nonempty('Answer must have at least one span'),
   citations: z.array(CitationSchema),
 });

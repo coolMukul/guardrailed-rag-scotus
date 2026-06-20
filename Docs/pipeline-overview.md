@@ -65,6 +65,16 @@ flag; the retrieval study found it added no quality on this corpus (dense
 retrieval is already at ceiling), so it is off by default. See
 [`reports/study.md`](../reports/study.md).
 
+**Comparative questions get special handling.** A question that compares two
+cases ("how do X and Y differ") needs *both* in context, but a single combined
+query vector leans toward one case and can starve the other below the cutoff. For
+these, retrieval (a) runs a dense **sub-query per named case** so each is fetched
+on its own vector, merges those pools with the combined-query pool, and (b)
+selects the final eight with **diversity across `case_name`** — round-robin so
+every case contributes its best chunk before any case contributes a second. The
+result is that both cases reliably make the top-k. Ordinary single-case queries
+are unaffected.
+
 ### Chunks + question → answer
 
 **Code:** [src/generate/langchain-generator.ts](../src/generate/langchain-generator.ts),
@@ -106,9 +116,10 @@ POST /ask { "query": "What did Miranda hold?" }
 │
 ├─ [trace: ask]
 │  ├─ [span: guardrails]   PII / injection / policy (parallel) → redacted query
-│  ├─ [span: retrieve]     embed(query) → Qdrant search(k=8) → 8 chunks + scores
-│  ├─ [span: generate]     structured-output call → answer_spans + citations
-│  ├─ [span: validate]     coverage check → grounding judge → (retry once)
+│  ├─ [span: retrieve]     embed(query) → Qdrant search(k=8, comparative-aware) → chunks
+│  ├─ corpus-scope guard   named case not in retrieved set? → insufficient_evidence
+│  ├─ [span: generate]     structured-output call → answer_spans + citations (+ abstained)
+│  ├─ [span: validate]     coverage → grounding judge → (retry once) → per-span salvage
 │  └─ upload trace
 │
 └─ response: { answer_spans, citations, validation_status, retrieved_chunk_ids }

@@ -13,6 +13,19 @@
 import { RUNTIME } from '../config/runtime.js';
 
 /**
+ * Version identifiers for the two prompt layouts. Bump whenever prompt
+ * wording changes in a way that can affect answer quality — these values
+ * feed the config fingerprint that eval baselines are keyed on, so a silent
+ * prompt edit without a bump invalidates cross-run comparisons.
+ */
+const PROMPT_VERSION_BASE = 'generation-base-v2';
+const PROMPT_VERSION_CACHE = 'generation-cache-v2';
+
+export function getPromptVersion(): string {
+  return RUNTIME.promptCache ? PROMPT_VERSION_CACHE : PROMPT_VERSION_BASE;
+}
+
+/**
  * System prompt for citation-aware generation.
  * Tells the model: answer in JSON format, cite retrieved chunks, never claim without citation.
  *
@@ -32,6 +45,7 @@ function getBaseSystemPrompt(): string {
 
 CRITICAL: Your answer must be structured as JSON with this exact format:
 {
+  "abstained": false,
   "answer_spans": [
     {"text": "claim here", "citation_ids": [1887984097, 2100485910]},
     {"text": "another claim", "citation_ids": [3435321087]}
@@ -46,9 +60,10 @@ RULES:
 1. Every assertive statement in answer_spans must have at least one citation_id
 2. citation_ids must reference chunks by their ID number (shown as "ID: XXXXXXXXX" in the excerpts)
 3. Do NOT cite training knowledge. Only cite the provided excerpts.
-4. If you cannot answer based on provided excerpts, say so explicitly.
-5. Be concise. Each span should be 1-2 sentences max.
-6. For citations array: include ONLY chunks you actually cited. Use the exact chunk_id and copy text from input.
+4. If you cannot answer based on provided excerpts, set "abstained": true, write one span explaining that the excerpts do not support an answer, and cite the most relevant retrieved chunk as the basis for that conclusion. When you CAN answer, set "abstained": false.
+5. OUT-OF-CORPUS CASES: if the question is about a specific named case (e.g. asks for its holding, date, or outcome) and that case does NOT itself appear by name in the provided excerpts, you MUST set "abstained": true. Do not reconstruct or state its holding from other cases that merely mention, cite, or discuss it — answering the underlying principle from a related opinion is NOT permitted here.
+6. Be concise. Each span should be 1-2 sentences max.
+7. For citations array: include ONLY chunks you actually cited. Use the exact chunk_id and copy text from input.
 
 Examples of CORRECT format:
 - Correct: {"text": "Miranda held that...", "citation_ids": [1887984097]}
@@ -78,6 +93,7 @@ Question: "What did Example v. State hold about confessions?"
 
 A correct answer:
 {
+  "abstained": false,
   "answer_spans": [
     {"text": "The Court held that a confession obtained without informing the defendant of the right to counsel cannot be admitted in the prosecution's case in chief.", "citation_ids": [555000111]},
     {"text": "The Court preserved the admissibility of voluntary statements made outside custodial interrogation.", "citation_ids": [555000222]}
@@ -101,6 +117,7 @@ Question: "How do First and Second differ on deference?"
 
 A correct answer:
 {
+  "abstained": false,
   "answer_spans": [
     {"text": "In First v. Agency, the Court deferred to an agency's reasonable construction of an ambiguous statute.", "citation_ids": [666000333]},
     {"text": "In Second v. Agency, the Court held that deference is unwarranted where the statutory text is clear.", "citation_ids": [666000444]}
@@ -118,6 +135,7 @@ Suppose the question asks about a case or topic that simply does not appear in t
 
 A correct answer:
 {
+  "abstained": true,
   "answer_spans": [
     {"text": "The provided excerpts do not contain information about this question, so I cannot answer it from the available material.", "citation_ids": [555000111]}
   ],
@@ -126,9 +144,27 @@ A correct answer:
   ]
 }
 
-Why this is correct: when the excerpts cannot support an answer, say so explicitly rather than answering from training knowledge. Cite the most relevant retrieved chunk as the basis for concluding the corpus lacks the answer. Never invent a holding, a date, a vote count, or a quotation that does not appear in the provided excerpts. An explicit "the excerpts do not contain this" is always better than a plausible-sounding but ungrounded claim, because every claim you make will be checked against the chunk you cite.
+Why this is correct: when the excerpts cannot support an answer, set "abstained": true and say so explicitly rather than answering from training knowledge. Cite the most relevant retrieved chunk as the basis for concluding the corpus lacks the answer. Never invent a holding, a date, a vote count, or a quotation that does not appear in the provided excerpts. An explicit "the excerpts do not contain this" is always better than a plausible-sounding but ungrounded claim, because every claim you make will be checked against the chunk you cite.
 
-FINAL CHECKLIST before you emit JSON: (1) every span has at least one citation_id; (2) every citation_id appears as an [ID: ...] in the provided excerpts; (3) the citations array lists exactly the chunks cited in answer_spans, no more and no fewer; (4) chunk text in citations is copied from the input, not paraphrased; (5) the output is a single JSON object with no markdown fences or commentary.`;
+Example 4 — the question names a case that is NOT in the excerpts (abstain, do not reconstruct):
+Suppose the question asks "What did Landmark v. Old (1955) hold?" but no excerpt is from Landmark v. Old. One excerpt, from a different in-corpus case, happens to summarize Landmark's rule in passing:
+[ID: 777000555] Recent v. State 400 U.S. 10 (2024) (majority)
+"Building on Landmark v. Old, which required a warrant for such searches, we extend that rule to digital records."
+
+A correct answer:
+{
+  "abstained": true,
+  "answer_spans": [
+    {"text": "The provided excerpts do not include the opinion in the case you asked about, so I cannot state its holding from the available material.", "citation_ids": [777000555]}
+  ],
+  "citations": [
+    {"chunk_id": 777000555, "case_name": "Recent v. State", "citation": "400 U.S. 10 (2024)", "section": "majority", "text": "Building on Landmark v. Old, which required a warrant for such searches, we extend that rule to digital records."}
+  ]
+}
+
+Why this is correct: even though a retrieved chunk mentions the named case's rule, that case's own opinion is not in the excerpts. State the holding of an out-of-corpus case ONLY from that case's own excerpts — never from another opinion that merely discusses it. Set "abstained": true.
+
+FINAL CHECKLIST before you emit JSON: (1) "abstained" is true only when you are declining to answer from the excerpts (including any out-of-corpus named case), false otherwise; (2) every span has at least one citation_id; (3) every citation_id appears as an [ID: ...] in the provided excerpts; (4) the citations array lists exactly the chunks cited in answer_spans, no more and no fewer; (5) chunk text in citations is copied from the input, not paraphrased; (6) the output is a single JSON object with no markdown fences or commentary.`;
 }
 
 /**
@@ -193,7 +229,7 @@ Please regenerate your answer. IMPORTANT:
 1. Re-read the provided excerpts carefully
 2. Only claim what the excerpts actually support
 3. If an excerpt doesn't support your claim, don't cite it
-4. If you can't answer based on provided excerpts, say so explicitly
+4. If you can't answer based on provided excerpts, set "abstained": true and say so explicitly
 5. Use chunk ID numbers (shown as "ID: XXXXXXXXX"), not position in this list
 
 Provided excerpts:

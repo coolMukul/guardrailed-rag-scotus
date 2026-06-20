@@ -13,8 +13,10 @@
  * the prompt-caching sweep measures.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export interface UsageRecord {
-  /** Which pipeline stage made the call: 'generate', 'judge', 'regenerate'. */
+  /** Which pipeline stage made the call: 'generate', 'judge', 'injection'. */
   source: string;
   model: string;
   inputTokens: number;
@@ -24,8 +26,29 @@ export interface UsageRecord {
 
 let records: UsageRecord[] = [];
 
+// Per-request collector for the HTTP server. The global accumulator above is
+// fine for the eval runners (they process questions sequentially in one task),
+// but concurrent /ask requests would interleave their records there. The
+// AsyncLocalStorage store follows each request's async call tree, so every
+// recordUsage() made anywhere inside that request lands in its own array.
+const requestScope = new AsyncLocalStorage<UsageRecord[]>();
+
 export function recordUsage(record: UsageRecord): void {
   records.push(record);
+  requestScope.getStore()?.push(record);
+}
+
+/**
+ * Run fn with an isolated usage collector and return both fn's result and
+ * the records captured during it. Does not disturb the global accumulator,
+ * so resetUsage()/getUsageTotals() callers are unaffected.
+ */
+export async function withUsageScope<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; records: UsageRecord[] }> {
+  const scoped: UsageRecord[] = [];
+  const result = await requestScope.run(scoped, fn);
+  return { result, records: scoped };
 }
 
 export function resetUsage(): void {

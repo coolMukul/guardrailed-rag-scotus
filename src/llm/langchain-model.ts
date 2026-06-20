@@ -6,7 +6,7 @@
  *
  *   - groq    -> RateLimitedChatGroq (free-tier rate limiter as a pre-call gate)
  *   - gemini  -> ChatGoogleGenerativeAI (native responseSchema structured output)
- *   - litellm -> ChatOpenAI pointed at the proxy (json-schema / tool-calling)
+ *   - openai  -> ChatOpenAI pointed at an OpenAI-compatible proxy (json-schema / tool-calling)
  *
  * Temperature policy lives here and only here: the GPT-5 family rejects any
  * temperature other than 1, everything else uses the configured default.
@@ -60,15 +60,15 @@ export function buildLangChainModel(modelName: string): BaseChatModel {
     });
   }
 
-  if (provider === 'litellm') {
+  if (provider === 'openai') {
     return new ChatOpenAI({
       model: modelName,
-      // litellm proxy supplies the real key; ChatOpenAI requires a non-empty value.
-      apiKey: CONFIG.litellm.apiKey ?? 'sk-litellm-proxy',
+      // the proxy supplies the real key; ChatOpenAI requires a non-empty value.
+      apiKey: CONFIG.openai.apiKey ?? 'sk-openai-proxy',
       temperature,
       configuration: {
-        // Guard against a stray space in LITELLM_BASE_URL (.env had a leading space).
-        baseURL: CONFIG.litellm.baseUrl?.trim(),
+        // Guard against a stray space in LLM_BASE_URL (.env had a leading space).
+        baseURL: CONFIG.openai.baseUrl?.trim(),
       },
     });
   }

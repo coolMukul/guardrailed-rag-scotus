@@ -9,6 +9,7 @@
     "smoke:guardrails": "tsx scripts/smoke-guardrails.ts",
     "smoke:pipeline": "tsx scripts/smoke-pipeline.ts",
     "test:presidio": "tsx scripts/test-presidio.ts",
+    "test:injection-patterns": "tsx scripts/test-injection-patterns.ts",
     "ingest": "tsx scripts/ingest-courtlistener.ts",
     "chunk": "tsx scripts/chunk-corpus.ts",
     "ingest-qdrant": "tsx scripts/ingest-qdrant.ts",

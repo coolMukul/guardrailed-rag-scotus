@@ -2,10 +2,12 @@
 
 Generation alone is not trustworthy: a model can produce fluent, plausible text
 that the retrieved opinions do not support. The validator turns "sounds right"
-into "is supported," using two gates and a bounded retry. Cheap structural
-checks run first; the expensive semantic check runs only if they pass; if the
-answer still cannot be grounded, the system abstains rather than ship an
-unsupported answer.
+into "is supported," using a deterministic scope guard, two citation gates, and a
+bounded retry. A question about a case outside the corpus is refused before
+generation; cheap structural checks run first; the expensive semantic check runs
+only if they pass; and when only part of an answer is grounded, the supported
+part is kept and the rest dropped rather than shipped unsupported. If nothing can
+be grounded, the system abstains.
 
 ## Structured output is the precondition
 
@@ -16,6 +18,7 @@ Generation returns schema-validated JSON, not free text:
 
 ```jsonc
 {
+  "abstained": false,
   "answer_spans": [
     { "text": "Miranda held that…", "citation_ids": [0, 1] },
     { "text": "The Court extended this…", "citation_ids": [2] }
@@ -26,12 +29,46 @@ Generation returns schema-validated JSON, not free text:
 }
 ```
 
+`abstained` is the explicit refusal signal. When the model cannot answer from the
+excerpts it sets `abstained: true` and the answer is reported as an abstention —
+regardless of how the refusal text happens to cite a chunk. This is the single
+source of truth for "did it answer?", so a refusal can never be mislabeled as a
+valid answer just because it carries a citation.
+
 The prompt lists each retrieved chunk with an explicit index (`[0]`, `[1]`, …)
 and instructs the model to cite only those indices and never its training
 knowledge. Showing the index scheme up front keeps `citation_ids` aligned and
 prevents off-by-one drift. Because the output is schema-validated at the
 boundary, malformed output is rejected immediately — there is no parse-and-hope
 path, and the typed answer flows cleanly into both gates.
+
+## Gate 0 — Corpus-scope guard (deterministic, before generation)
+
+**Code:** [src/validator/corpus-scope.ts](../src/validator/corpus-scope.ts)
+
+The corpus covers a fixed set of opinions. If a question names a specific case
+(`PARTY v. PARTY`) whose own opinion was not retrieved, the holding must not be
+answered — even when a *related* in-corpus opinion recites it. Grounding alone
+cannot enforce this: a claim reconstructed from another case's chunk genuinely
+*is* entailed by that chunk, so the judge passes it. The guard closes that gap
+deterministically, and runs **before generation** so an out-of-scope question
+costs no model calls.
+
+The check parses each named case from the question and asks whether some
+retrieved `case_name` carries that case's party surnames. It is deliberately
+biased toward answering, in two ways:
+
+- A case counts as present when a retrieved name carries **both** its party
+  surnames, so an answerable in-corpus question is never falsely refused.
+- Each named case is judged **independently**, and the guard fires only when
+  **every** named case is absent. A comparative names two cases that live in
+  different chunks, so each is checked against the retrieved set on its own. As
+  long as any named case is present, the request proceeds and retrieval plus
+  grounding handle the rest.
+
+When the guard fires it short-circuits to `insufficient_evidence`. Questions with
+no `PARTY v. PARTY` reference are left untouched — the generation prompt is the
+backstop there.
 
 ## Gate 1 — Citation coverage (deterministic)
 
@@ -58,43 +95,55 @@ circuits the expensive gate.
 **Code:** [src/validator/grounding-judge.ts](../src/validator/grounding-judge.ts),
 prompt in [src/prompts/judge.ts](../src/prompts/judge.ts)
 
-For each span, an LLM is asked whether the cited chunk **entails** the claim —
-`yes` / `no` / `uncertain`, with a reason. `no` or `uncertain` fails the span
-and the reason is recorded. This catches the failures coverage cannot: the model
-cited the right chunk but overstated it, or the chunk is on-topic but does not
-actually support the specific assertion.
+For each span, an LLM is asked whether the cited chunk **entails** the claim, with
+a reason. Entailment is judged fairly, not literally: a faithful paraphrase or a
+direct inference a careful reader would draw from the chunk passes; a span fails
+only when the chunk does not support it or contradicts it. This catches the
+failures coverage cannot: the model cited the right chunk but overstated it, or
+the chunk is on-topic but does not actually support the specific assertion. The
+verdict is **per span**, so a partly-supported answer can keep its supported
+spans (below).
 
 **Why an LLM judge** rather than a dedicated NLI model? Semantic entailment is
 hard to compute locally; one extra model call is acceptable and avoids
 loading and maintaining a second local model. The honest limitation is that the
 judge and the generator may be the same model family, so their judgments
 correlate — acceptable as a first gate, and mitigated by giving the judge a
-distinct, stricter prompt. Where reliability matters more, the judge can be
-escalated to a stronger model or a multi-judge quorum without changing the
-surrounding flow.
+distinct prompt and an independent per-span rubric. Where reliability matters
+more, the judge can be escalated to a stronger model or a multi-judge quorum
+without changing the surrounding flow.
 
 The judge also fails open: if the judge call itself errors (network, outage),
 the span is treated as passing. A transient infrastructure failure should not
 drop a request, and the fallback introduces no new fabrication.
 
-## Bounded retry, then abstain
+## Bounded retry, then per-span salvage, then abstain
 
 **Code:** [src/validator/retry.ts](../src/validator/retry.ts)
 
+Two situations short-circuit straight to abstention before any gate runs: the
+generator set `abstained` (it declined to answer), or Gate 0 fired. Otherwise:
+
 ```
+generator abstained ⇒ insufficient_evidence
 attempt 1:
-  coverage → fail ⇒ insufficient_evidence
-  grounding → pass ⇒ valid
-            → fail, retry left ⇒ regenerate with corrective feedback
-            → fail, no retry  ⇒ insufficient_evidence
+  coverage  → fail ⇒ insufficient_evidence
+  grounding → all spans pass        ⇒ valid
+            → some fail, retry left ⇒ regenerate with corrective feedback
+            → some fail, no retry   ⇒ salvage (below)
 attempt 2 (with feedback):
-  coverage → fail ⇒ insufficient_evidence
-  grounding → pass ⇒ valid
-            → fail ⇒ insufficient_evidence
+  coverage  → fail ⇒ insufficient_evidence
+  grounding → all spans pass ⇒ valid
+            → some fail       ⇒ salvage (below)
+
+salvage: keep the spans the judge supported, drop the unsupported ones,
+         prune citations to what survives
+  any span survives ⇒ valid (partial answer)
+  no span survives  ⇒ insufficient_evidence
 ```
 
-On a grounding failure the model is regenerated **once**, with feedback naming
-exactly which spans failed and why:
+On a grounding failure the model is first regenerated **once**, with feedback
+naming exactly which spans failed and why:
 
 ```
 Your previous answer had issues:
@@ -102,14 +151,17 @@ Your previous answer had issues:
 Regenerate, citing only what the excerpts explicitly state.
 ```
 
-Retry is bounded to one round. A single corrective pass usually works because
-the feedback is specific; looping further wastes model calls on questions
-that are genuinely unanswerable from the corpus. When the second attempt still
-fails, the system returns `insufficient_evidence`.
+Retry is bounded to one round — a single specific correction usually works, and
+looping further wastes model calls. When a span remains unsupported after the
+retry, per-span salvage keeps the spans the judge supported and drops only the
+unsupported ones, pruning the citations to match; the answer is reported `valid`
+as long as at least one span survives. A correct core holding is returned even
+when a secondary detail could not be grounded.
 
-**Abstention is a feature, not a failure.** "I cannot answer this from the
-provided opinions" is the correct response to an out-of-corpus question and is
-far better than a confident fabrication.
+When no span survives — nothing in the answer can be grounded — the system
+returns `insufficient_evidence`. "I cannot answer this from the provided
+opinions" is the correct response to an out-of-corpus question, and far better
+than a confident fabrication.
 
 ## Worked example — a hallucination caught
 

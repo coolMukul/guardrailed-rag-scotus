@@ -8,6 +8,7 @@
  * Routes:
  * - GET /health — liveness probe (always returns 200)
  * - GET /ready — readiness probe (checks dependencies; 503 if not ready)
+ * - GET /meta — config snapshot + fingerprint (eval harness contract)
  * - POST /ask — main RAG endpoint
  */
 
@@ -15,6 +16,8 @@ import 'dotenv/config'; // Load .env file before anything else
 import { pathToFileURL } from 'node:url';
 import Fastify, { FastifyInstance } from 'fastify';
 import { registerAskRoute } from './routes/ask.js';
+import { registerReadyRoute } from './routes/ready.js';
+import { registerMetaRoute } from './routes/meta.js';
 import { logger } from '../logger.js';
 import { CONFIG } from '../config/constants.js';
 import { validateEnvironment } from '../config/validate.js';
@@ -40,11 +43,10 @@ export async function createServer(): Promise<FastifyInstance> {
 
   // Readiness probe: are all dependencies healthy?
   // Returns 200 if ready to accept requests, 503 if degraded
-  // TODO: add connectivity checks for Qdrant and the model provider
-  app.get('/ready', async (request, reply) => {
-    // For now, always ready (dependency checks not yet implemented)
-    return reply.send({ status: 'ready', timestamp: new Date().toISOString() });
-  });
+  await registerReadyRoute(app);
+
+  // Config snapshot + fingerprint for eval-run regression detection
+  await registerMetaRoute(app);
 
   // Register application routes
   await registerAskRoute(app);
@@ -79,7 +81,8 @@ export async function start() {
     // User-friendly message
     console.log(`\n✓ Server listening on http://${host}:${port}`);
     console.log(`  GET  /health  — Liveness probe`);
-    console.log(`  GET  /ready   — Readiness probe`);
+    console.log(`  GET  /ready   — Readiness probe (dependency checks)`);
+    console.log(`  GET  /meta    — Config snapshot + fingerprint`);
     console.log(`  POST /ask     — RAG endpoint\n`);
   } catch (err) {
     // Startup failed: log and exit
